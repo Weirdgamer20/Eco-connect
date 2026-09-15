@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 const EnvSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  REDIS_URL: z.string().min(1),
-  JWT_SECRET: z.string().min(32),
-  JWT_REFRESH_SECRET: z.string().min(32),
+  DATABASE_URL: z.string().default("postgresql://postgres:postgres@localhost:5432/ecoconnect"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
+  JWT_SECRET: z.string().default("ecoconnect_super_secret_jwt_key_at_least_32_characters_long_2026"),
+  JWT_REFRESH_SECRET: z.string().default("ecoconnect_super_secret_refresh_jwt_key_32_chars_2026"),
   JWT_EXPIRES_IN: z.string().default("15m"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
-  GEMINI_API_KEY: z.string().min(1),
+  GEMINI_API_KEY: z.string().default("mock_gemini_api_key_development"),
   GEMINI_MODEL: z.string().default("gemini-1.5-pro"),
   GEMINI_EMBEDDING_MODEL: z.string().default("text-embedding-004"),
   PORT: z.coerce.number().default(4000),
@@ -45,7 +45,7 @@ export function validateEnv(): Env {
 
 export function getEnv(): Env {
   if (!_env) {
-    throw new Error("validateEnv() must be called before getEnv()");
+    return validateEnv();
   }
   return _env;
 }

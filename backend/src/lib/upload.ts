@@ -1,7 +1,6 @@
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { fileTypeFromBuffer } from "file-type";
 import { AppError } from "../middleware/errorHandler";
 import { getEnv } from "./env";
 
@@ -71,6 +70,7 @@ export async function validateUploadedFile(
   declaredFieldName: string
 ): Promise<{ mimeType: string; isImage: boolean; isVideo: boolean }> {
   const buffer = fs.readFileSync(filePath);
+  const { fileTypeFromBuffer } = await (Function('return import("file-type")')() as Promise<typeof import("file-type")>);
   const detected = await fileTypeFromBuffer(buffer);
 
   if (!detected) {
