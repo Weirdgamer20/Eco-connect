@@ -1,0 +1,595 @@
+// EcoConnect Prisma Schema
+// Database: PostgreSQL with pgvector extension
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  CITIZEN
+  OFFICIAL
+  ADMIN
+}
+
+enum UserTrustState {
+  TRUSTED
+  SUSPICIOUS
+  VERIFICATION
+  FAKER
+}
+
+enum GrievanceStatus {
+  DRAFT
+  SUBMITTED
+  AI_PENDING
+  MATCHED
+  NEW_ISSUE
+  ROUTED
+  REJECTED
+}
+
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  AWAITING_VERIFICATION
+  RESOLVED
+  CLOSED
+  AUTO_CLOSED
+  REOPENED
+  ESCALATED
+}
+
+enum Priority {
+  P1
+  P2
+  P3
+  P4
+}
+
+enum IssueCategory {
+  AIR_POLLUTION
+  WATER_POLLUTION
+  NOISE_POLLUTION
+  PLASTIC_POLLUTION
+  WASTE_BURNING
+  ILLEGAL_DUMPING
+  SEWAGE_LEAKAGE
+  WATER_CONTAMINATION
+  ILLEGAL_TREE_CUTTING
+  CONSTRUCTION_POLLUTION
+  POTHOLES
+  ROAD_DAMAGE
+  BROKEN_INFRASTRUCTURE
+  TRAFFIC_HAZARDS
+  DRAIN_BLOCKAGE
+  WATER_LEAKAGE
+  UNSAFE_PUBLIC_SPACES
+  ENCROACHMENT
+  CARBON_HOTSPOTS
+  HEAT_ISLAND_ZONES
+  URBAN_FLOODING
+  WATER_STRESS_ZONES
+  WASTE_HOTSPOTS
+  AIR_QUALITY_HOTSPOTS
+  RENEWABLE_ENERGY_ADOPTION
+  OTHER
+}
+
+enum Department {
+  AIR_QUALITY
+  WASTE_MANAGEMENT
+  ROAD_CONDITION
+  GENERAL
+}
+
+enum VoteType {
+  UP
+  DOWN
+}
+
+enum AISeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  NEGLIGIBLE
+}
+
+enum AccountabilityEventType {
+  ISSUE_CREATED
+  ROUTED
+  NOTIFIED_OFFICIAL
+  ACCEPTED
+  REJECTED
+  IN_PROGRESS
+  RESOLVED
+  VERIFICATION_SENT
+  CONFIRMED_FIXED
+  REJECTED_RESOLUTION
+  REOPENED
+  AUTO_CLOSED
+  SLA_WARNING_1
+  SLA_GRACE_PERIOD
+  SLA_WARNING_2
+  ESCALATED
+  OFFICIAL_DISPUTED
+  COMMUNITY_POLL
+}
+
+enum NotificationType {
+  NEARBY_ISSUE
+  YOUR_GRIEVANCE
+  RESOLUTION_VERIFICATION
+  OFFICIAL_UPDATE
+  ESCALATION
+  REWARD
+  FRAUD_WARNING
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+}
+
+enum NotificationDelivery {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  RETRYING
+}
+
+enum FraudSignalType {
+  REPEATED_INVALID_SUBMISSION
+  REUSED_MEDIA
+  IMPOSSIBLE_METADATA
+  INCONSISTENT_LOCATION
+  ANOMALOUS_VOTING
+  UNRELATED_CONTENT
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String         @id @default(cuid())
+  role          UserRole       @default(CITIZEN)
+  name          String
+  phone         String         @unique
+  passwordHash  String
+  phoneVerified Boolean        @default(false)
+  anonymous     Boolean        @default(false)
+  trustState    UserTrustState @default(TRUSTED)
+  verifiedCount Int            @default(0) // count of verified contributions
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Relations
+  grievances            Grievance[]
+  votes                 Vote[]
+  comments              Comment[]
+  notifications         Notification[]
+  fraudSignals          FraudSignal[]
+  coupons               Coupon[]
+  notificationPrefs     NotificationPreference?
+  resolutionVerifications ResolutionVerification[]
+
+  @@index([phone])
+  @@index([trustState])
+}
+
+model Official {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  department   Department
+  jurisdiction String     // Jurisdiction name
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  // Relations
+  issues       CivicIssue[]
+  responses    OfficialResponse[]
+
+  @@index([department])
+  @@index([email])
+}
+
+// ─── Grievances ───────────────────────────────────────────────────────────────
+
+model Grievance {
+  id              String          @id @default(cuid())
+  idempotencyKey  String          @unique
+  userId          String
+  status          GrievanceStatus @default(SUBMITTED)
+  category        IssueCategory
+  description     String
+  latitude        Float
+  longitude       Float
+  anonymous       Boolean         @default(false)
+  civicIssueId    String?
+  aiAnalysisId    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  user            User            @relation(fields: [userId], references: [id])
+  civicIssue      CivicIssue?     @relation(fields: [civicIssueId], references: [id])
+  aiAnalysis      AIAnalysis?     @relation(fields: [aiAnalysisId], references: [id])
+  media           MediaFile[]
+
+  @@index([userId])
+  @@index([civicIssueId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model MediaFile {
+  id           String    @id @default(cuid())
+  grievanceId  String
+  type         MediaType
+  originalName String
+  storagePath  String    // internal path / CDN key
+  publicUrl    String?   // public derivative URL
+  mimeType     String
+  sizeBytes    Int
+  pHash        String?   // perceptual hash for duplicate detection
+  exifStripped Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  // Relations
+  grievance    Grievance @relation(fields: [grievanceId], references: [id])
+
+  @@index([grievanceId])
+  @@index([pHash])
+}
+
+// ─── AI Analysis ─────────────────────────────────────────────────────────────
+
+model AIAnalysis {
+  id                  String     @id @default(cuid())
+  modelName           String
+  modelVersion        String
+  promptVersion       String
+  category            IssueCategory
+  categoryConfidence  Float
+  severity            AISeverity
+  severityRationale   String
+  authorityDepartment Department
+  authorityConfidence Float
+  overallConfidence   Float
+  summary             String
+  needsClarification  Boolean    @default(false)
+  clarificationPrompt String?
+  evidenceFlags       Json       @default("[]") // Array of EvidenceFlag
+  rawOutput           Json       // Full AI response for audit
+  inputArtifactIds    String[]   // grievance ID + media IDs
+  processingMs        Int
+  createdAt           DateTime   @default(now())
+
+  // Relations
+  grievances          Grievance[]
+  matchResult         AIMatchResult?
+
+  @@index([createdAt])
+}
+
+model AIMatchResult {
+  id               String     @id @default(cuid())
+  analysisId       String     @unique
+  matchedIssueId   String?
+  matchConfidence  Float
+  matchRationale   String
+  createdAt        DateTime   @default(now())
+
+  // Relations
+  analysis         AIAnalysis @relation(fields: [analysisId], references: [id])
+
+  @@index([matchedIssueId])
+}
+
+// ─── Civic Issues ─────────────────────────────────────────────────────────────
+
+model CivicIssue {
+  id                   String      @id @default(cuid())
+  title                String
+  category             IssueCategory
+  department           Department
+  status               IssueStatus @default(OPEN)
+  priority             Priority    @default(P3)
+  latitude             Float       // exact (internal)
+  longitude            Float       // exact (internal)
+  publicLatitude       Float       // approximate (±~200m)
+  publicLongitude      Float       // approximate (±~200m)
+  publicAreaLabel      String      // Human-readable area name
+  jurisdiction         String
+  assignedOfficialId   String?
+  priorityScore        Float       @default(0)
+  reportCount          Int         @default(1)
+  upvoteCount          Int         @default(0)
+  downvoteCount        Int         @default(0)
+  resolutionNote       String?
+  resolutionEvidenceUrls String[]
+  slaDeadline          DateTime?
+  verificationDeadline DateTime?
+  embedding            Unsupported("vector(768)")?  // text embedding for similarity search
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  // Relations
+  grievances           Grievance[]
+  assignedOfficial     Official?   @relation(fields: [assignedOfficialId], references: [id])
+  votes                Vote[]
+  comments             Comment[]
+  officialResponses    OfficialResponse[]
+  accountabilityEvents AccountabilityEvent[]
+  priorityRecord       PriorityRecord?
+  slaRecord            SLARecord?
+  resolutionVerifications ResolutionVerification[]
+
+  @@index([status])
+  @@index([department])
+  @@index([priority])
+  @@index([assignedOfficialId])
+  @@index([jurisdiction])
+  @@index([createdAt])
+}
+
+// ─── Priority & SLA ───────────────────────────────────────────────────────────
+
+model PriorityRecord {
+  id                    String     @id @default(cuid())
+  civicIssueId          String     @unique
+  priority              Priority
+  safetyScore           Float
+  environmentalScore    Float
+  peopleAffectedEst     Int
+  geographicSpreadKm    Float
+  severityScore         Float
+  timeUnresolvedScore   Float
+  communitySignalScore  Float
+  ruleEngineVersion     String
+  rationale             String
+  createdAt             DateTime   @default(now())
+
+  civicIssue            CivicIssue @relation(fields: [civicIssueId], references: [id])
+}
+
+model SLARecord {
+  id               String     @id @default(cuid())
+  civicIssueId     String     @unique
+  slaType          String     // SERIOUS_24H | STANDARD_10D
+  startedAt        DateTime
+  deadline         DateTime
+  warning1SentAt   DateTime?
+  gracePeriodAt    DateTime?
+  warning2SentAt   DateTime?
+  escalatedAt      DateTime?
+  resolvedAt       DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  civicIssue       CivicIssue @relation(fields: [civicIssueId], references: [id])
+}
+
+// ─── Community ────────────────────────────────────────────────────────────────
+
+model Vote {
+  id           String     @id @default(cuid())
+  userId       String
+  civicIssueId String
+  type         VoteType
+  createdAt    DateTime   @default(now())
+
+  user         User       @relation(fields: [userId], references: [id])
+  civicIssue   CivicIssue @relation(fields: [civicIssueId], references: [id])
+
+  @@unique([userId, civicIssueId])
+  @@index([civicIssueId])
+}
+
+model Comment {
+  id           String     @id @default(cuid())
+  userId       String
+  civicIssueId String
+  content      String
+  flagged      Boolean    @default(false)
+  flagReason   String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  user         User       @relation(fields: [userId], references: [id])
+  civicIssue   CivicIssue @relation(fields: [civicIssueId], references: [id])
+
+  @@index([civicIssueId])
+  @@index([userId])
+}
+
+// ─── Official workflow ────────────────────────────────────────────────────────
+
+model OfficialResponse {
+  id           String     @id @default(cuid())
+  officialId   String
+  civicIssueId String
+  action       String     // ACCEPTED | REJECTED | IN_PROGRESS | RESOLVED | DISPUTED
+  note         String?
+  evidenceUrls String[]
+  createdAt    DateTime   @default(now())
+
+  official     Official   @relation(fields: [officialId], references: [id])
+  civicIssue   CivicIssue @relation(fields: [civicIssueId], references: [id])
+
+  @@index([civicIssueId])
+  @@index([officialId])
+}
+
+// ─── Resolution verification ──────────────────────────────────────────────────
+
+model ResolutionVerification {
+  id           String     @id @default(cuid())
+  civicIssueId String
+  userId       String
+  confirmed    Boolean
+  reason       String?
+  evidenceUrls String[]
+  createdAt    DateTime   @default(now())
+
+  civicIssue   CivicIssue @relation(fields: [civicIssueId], references: [id])
+  user         User       @relation(fields: [userId], references: [id])
+
+  @@index([civicIssueId])
+}
+
+// ─── Accountability ───────────────────────────────────────────────────────────
+
+model AccountabilityEvent {
+  id           String                  @id @default(cuid())
+  civicIssueId String
+  type         AccountabilityEventType
+  actorType    String                  // SYSTEM | CITIZEN | OFFICIAL
+  actorId      String?
+  detail       Json                    @default("{}")
+  createdAt    DateTime                @default(now())
+  // NOTE: No updatedAt — events are append-only and immutable
+
+  civicIssue   CivicIssue             @relation(fields: [civicIssueId], references: [id])
+
+  @@index([civicIssueId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id           String               @id @default(cuid())
+  userId       String
+  type         NotificationType
+  title        String
+  body         String
+  civicIssueId String?
+  read         Boolean              @default(false)
+  createdAt    DateTime             @default(now())
+
+  user         User                 @relation(fields: [userId], references: [id])
+  deliveries   NotificationDeliveryRecord[]
+
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+model NotificationDeliveryRecord {
+  id             String               @id @default(cuid())
+  notificationId String
+  channel        NotificationDelivery
+  status         NotificationStatus   @default(PENDING)
+  attemptCount   Int                  @default(0)
+  lastAttemptAt  DateTime?
+  sentAt         DateTime?
+  failureReason  String?
+  createdAt      DateTime             @default(now())
+
+  notification   Notification         @relation(fields: [notificationId], references: [id])
+
+  @@index([notificationId])
+  @@index([status])
+}
+
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  radiusM       Int      @default(150)
+  categories    String[] // IssueCategory values
+  enableEmail   Boolean  @default(true)
+  enableSMS     Boolean  @default(false)
+  enablePush    Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+// ─── Trust & Fraud ────────────────────────────────────────────────────────────
+
+model FraudSignal {
+  id           String          @id @default(cuid())
+  userId       String
+  type         FraudSignalType
+  detail       String
+  confidence   Float
+  grievanceId  String?
+  processed    Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+
+  user         User            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([processed])
+}
+
+// ─── Rewards ──────────────────────────────────────────────────────────────────
+
+model Coupon {
+  id           String   @id @default(cuid())
+  userId       String
+  grievanceId  String
+  code         String   @unique @default(cuid())
+  description  String
+  used         Boolean  @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([code])
+}
+
+// ─── Audit log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  String?
+  action     String
+  resource   String
+  resourceId String?
+  detail     Json     @default("{}")
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([resource, resourceId])
+  @@index([createdAt])
+}
+
+// ─── OTP store (ephemeral) ────────────────────────────────────────────────────
+
+model OTPRecord {
+  id        String   @id @default(cuid())
+  phone     String   @unique
+  otp       String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+  @@index([expiresAt])
+}
