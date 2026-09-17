@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 const EnvSchema = z.object({
-  DATABASE_URL: z.string().default("postgresql://postgres:postgres@localhost:5432/ecoconnect"),
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
-  JWT_SECRET: z.string().default("ecoconnect_super_secret_jwt_key_at_least_32_characters_long_2026"),
-  JWT_REFRESH_SECRET: z.string().default("ecoconnect_super_secret_refresh_jwt_key_32_chars_2026"),
+  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+  JWT_REFRESH_SECRET: z.string().min(32, "JWT_REFRESH_SECRET must be at least 32 characters"),
   JWT_EXPIRES_IN: z.string().default("15m"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
-  GEMINI_API_KEY: z.string().default("mock_gemini_api_key_development"),
+  GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-1.5-pro"),
   GEMINI_EMBEDDING_MODEL: z.string().default("text-embedding-004"),
   PORT: z.coerce.number().default(4000),
@@ -35,11 +35,19 @@ let _env: Env | undefined;
 export function validateEnv(): Env {
   const result = EnvSchema.safeParse(process.env);
   if (!result.success) {
-    console.error("[EcoConnect] ❌ Environment validation failed:");
+    console.error("[EcoConnect] Environment validation failed:");
     console.error(result.error.format());
     process.exit(1);
   }
-  _env = result.data;
+
+  const env = result.data;
+
+  if (env.NODE_ENV === "production" && !env.GEMINI_API_KEY) {
+    console.error("[EcoConnect] GEMINI_API_KEY is required in production.");
+    process.exit(1);
+  }
+
+  _env = env;
   return _env;
 }
 
